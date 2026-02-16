@@ -15,14 +15,14 @@ class MemeSearchEngine:
         self.memes: List[Dict[str, Any]] = []
         self.embeddings: np.ndarray = None
         self.is_ready = False
-        # Initialize CLIP model - using larger model for better accuracy
-        print("Loading CLIP model (large variant for better search quality)...")
-        model_name = "openai/clip-vit-large-patch14"
+        # Initialize CLIP model - using base model for memory efficiency
+        print("Loading CLIP model (base variant optimized for Railway free tier)...")
+        model_name = "openai/clip-vit-base-patch32"
         self.model = CLIPModel.from_pretrained(model_name)
         self.processor = CLIPProcessor.from_pretrained(model_name)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
-        print(f"✓ CLIP large model loaded on {self.device}")
+        print(f"✓ CLIP base model loaded on {self.device}")
 
         # Paths
         self.cache_file = Path("embeddings_cache.json")
@@ -279,8 +279,8 @@ class MemeSearchEngine:
 
             except Exception as e:
                 print(f"Error processing {meme['name']}: {e}")
-                # Add zero embedding as placeholder (768 dims for large model)
-                embeddings.append(np.zeros(768))
+                # Add zero embedding as placeholder (512 dims for base model)
+                embeddings.append(np.zeros(512))
 
         return np.array(embeddings)
 
