@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>m<i>i</i>m<i>i</i> — semantic meme search</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Synonym:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="grain"></div>
+    <div class="gradient-orb gradient-orb-1"></div>
+    <div class="gradient-orb gradient-orb-2"></div>
+
+    <header class="header">
+        <div class="header-content">
+            <h1 class="logo">m<i>i</i>m<i>i</i></h1>
+            <p class="tagline">describe the meme to find the meme</p>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="search-container">
+            <div class="search-wrapper">
+                <span class="search-placeholder" id="searchPlaceholder"></span>
+                <input
+                    type="text"
+                    class="search-input"
+                    id="searchInput"
+                    autocomplete="off"
+                >
+                <button class="search-button" id="searchButton">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="8.5" cy="8.5" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M13 13l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="search-suggestions" id="suggestions">
+                <button class="suggestion-chip">reaction when someone is wrong</button>
+                <button class="suggestion-chip">existential crisis but funny</button>
+                <button class="suggestion-chip">wholesome encouragement</button>
+                <button class="suggestion-chip">awkward silence energy</button>
+                <button class="suggestion-chip">confidence before disaster</button>
+            </div>
+        </div>
+
+        <div class="results-container" id="resultsContainer">
+            <div class="results-header">
+                <p class="results-count" id="resultsCount"></p>
+            </div>
+            <div class="meme-grid" id="memeGrid"></div>
+        </div>
+
+        <div class="empty-state" id="emptyState">
+            <div class="empty-icon">
+                <svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="40" cy="40" r="38" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 6" opacity="0.2"/>
+                    <path d="M40 25v30M25 40h30" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.3"/>
+                </svg>
+            </div>
+            <h2 class="empty-title">search semantically</h2>
+            <p class="empty-description">
+                describe what you're feeling, thinking, or scheming.<br>
+                let's put a meme on that.
+            </p>
+        </div>
+    </main>
+
+    <!-- Meme Creation Modal -->
+    <div class="modal" id="memeModal">
+        <div class="modal-overlay" onclick="closeMemeModal()"></div>
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeMemeModal()">&times;</button>
+
+            <div class="modal-body">
+                <div class="modal-left">
+                    <div class="modal-image-container">
+                        <img id="modalMemeImage" src="" alt="Meme template">
+                    </div>
+                    <div class="meme-actions-mini" id="memeActionsMini">
+                        <button class="action-btn-mini" id="copyLinkButton" onclick="copyMemeLink()">
+                            📋 share
+                        </button>
+                        <button class="action-btn-mini" onclick="downloadMeme()">
+                            ⬇️ download
+                        </button>
+                    </div>
+                </div>
+
+                <div class="modal-right">
+                    <h3 class="modal-section-title">create your meme</h3>
+
+                    <div class="form-group">
+                        <label for="memeDescription">describe what you want to say:</label>
+                        <textarea
+                            id="memeDescription"
+                            placeholder="e.g., when my code finally works on the first try..."
+                            rows="4"
+                        ></textarea>
+                    </div>
+
+                    <button
+                        class="generate-button"
+                        id="generateMemeButton"
+                        onclick="generateMeme()"
+                    >
+                        ✨ generate with AI
+                    </button>
+
+                    <div class="loading-indicator" id="generationLoading">
+                        <div class="spinner"></div>
+                        <p>AI is writing your meme...</p>
+                    </div>
+
+                    <div class="generated-meme-container" id="generatedMemeContainer">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

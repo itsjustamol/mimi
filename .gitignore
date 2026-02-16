@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+.env
+
+# Embeddings cache
+embeddings_cache.json
+meme_index.json
+
+# Generated meme images
+generated_memes/
+
+# Local memes folder
+memes/
+
+# Model cache
+.cache/
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
