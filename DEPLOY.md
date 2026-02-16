@@ -26,7 +26,7 @@ git push -u origin main
 5. Choose your **mimi** repository
 6. Railway will automatically detect it's a Python app and start deploying
 
-### 3. Add Environment Variable
+### 3. Add Environment Variables
 
 After deployment starts:
 
@@ -37,13 +37,19 @@ After deployment starts:
 5. Add:
    - **Name**: `ANTHROPIC_API_KEY`
    - **Value**: `your_anthropic_api_key_here`
-6. Click **"Add"**
+6. Add:
+   - **Name**: `SEARCH_MODE`
+   - **Value**: `auto`
+7. Add:
+   - **Name**: `MAX_REMOTE_MEMES`
+   - **Value**: `160`
+8. Click **"Add"**
 
 ### 4. Wait for Deployment
 
 Railway will:
 - Install Python dependencies (~2-3 minutes)
-- Download CLIP model (~1-2 minutes)
+- Download CLIP model assets
 - Start the server
 - Give you a public URL like: `https://mimi-production.up.railway.app`
 
@@ -62,9 +68,9 @@ Your meme search app is now live! 🎉
 ## Important Notes
 
 ### First Request Will Be Slow
-- The first search after deployment takes ~30 seconds
-- This is normal - CLIP model needs to load and create embeddings
-- After that, searches are instant (cached)
+- The first startup does indexing and embedding creation
+- This is normal and depends on `MAX_REMOTE_MEMES`
+- Subsequent restarts are faster (cache is reused)
 
 ### Free Tier Limits
 Railway free tier includes:
@@ -86,6 +92,8 @@ Railway free tier includes:
 **App crashes on startup:**
 - Check logs in Railway dashboard
 - Verify `ANTHROPIC_API_KEY` is set correctly
+- Keep `SEARCH_MODE=auto` on free tier
+- Reduce `MAX_REMOTE_MEMES` (for example: `120`)
 
 **Can't access the app:**
 - Make sure deployment shows "Deployed" status

@@ -211,10 +211,11 @@ async def serve_generated_meme(filename: str):
 async def get_status():
     """Get indexing status"""
     if search_engine is None:
-        return {"total_memes": 0, "status": "loading", "sources": {}}
+        return {"total_memes": 0, "status": "loading", "search_mode": "initializing", "sources": {}}
     return {
         "total_memes": len(search_engine.memes),
         "status": "ready" if search_engine.is_ready else "indexing",
+        "search_mode": getattr(search_engine, "search_mode", "unknown"),
         "sources": {
             "imgflip": len([m for m in search_engine.memes if m["source"] == "imgflip"]),
             "memegen": len([m for m in search_engine.memes if m["source"] == "memegen"]),

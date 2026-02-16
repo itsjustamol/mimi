@@ -3,10 +3,11 @@ import json
 import requests
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, CLIPTextModelWithProjection
 import numpy as np
 from io import BytesIO
 
@@ -15,19 +16,75 @@ class MemeSearchEngine:
         self.memes: List[Dict[str, Any]] = []
         self.embeddings: np.ndarray = None
         self.is_ready = False
-        # Initialize CLIP model - using base model for memory efficiency
-        print("Loading CLIP model (base variant optimized for Railway free tier)...")
-        model_name = "openai/clip-vit-base-patch32"
-        self.model = CLIPModel.from_pretrained(model_name)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
-        print(f"✓ CLIP base model loaded on {self.device}")
+        self.on_railway = bool(
+            os.getenv("RAILWAY_PROJECT_ID")
+            or os.getenv("RAILWAY_ENVIRONMENT_ID")
+            or os.getenv("RAILWAY_ENVIRONMENT")
+        )
+        self.model_name = os.getenv("CLIP_MODEL_NAME", "openai/clip-vit-base-patch32")
+        self.search_mode = self._resolve_search_mode()
+        self.semantic_mode = self.search_mode in {"full", "text"}
+        self.model = None
+        self.processor = None
+        self.text_model = None
+        self.tokenizer = None
+
+        # Keep defaults safe for constrained environments (Railway free tier).
+        default_remote_memes = "160" if self.on_railway else "250"
+        self.max_remote_memes = int(os.getenv("MAX_REMOTE_MEMES", default_remote_memes))
+
+        print(f"Search mode: {self.search_mode}")
+        try:
+            if self.search_mode == "full":
+                print(f"Loading CLIP full model ({self.model_name})...")
+                self.model = CLIPModel.from_pretrained(self.model_name, low_cpu_mem_usage=True)
+                self.processor = CLIPProcessor.from_pretrained(self.model_name)
+                self.model.to(self.device)
+                print(f"✓ CLIP full model loaded on {self.device}")
+            elif self.search_mode == "text":
+                print(f"Loading CLIP text model ({self.model_name})...")
+                self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
+                self.text_model = CLIPTextModelWithProjection.from_pretrained(
+                    self.model_name, low_cpu_mem_usage=True
+                )
+                self.text_model.to(self.device)
+                print(f"✓ CLIP text model loaded on {self.device}")
+            else:
+                print("Lexical fallback mode enabled; running without transformer model.")
+        except Exception as e:
+            # Keep service alive even if model init fails under strict memory limits.
+            self.search_mode = "lexical"
+            self.semantic_mode = False
+            self.model = None
+            self.processor = None
+            self.text_model = None
+            self.tokenizer = None
+            print(f"Model load failed; falling back to lexical search mode: {e}")
 
         # Paths
         self.cache_file = Path("embeddings_cache.json")
         self.local_memes_dir = Path("../memes")
         self.local_memes_dir.mkdir(exist_ok=True)
+
+    def _resolve_search_mode(self) -> str:
+        """Choose search mode from env, optimized for Railway free tier stability."""
+        if os.getenv("FORCE_LEXICAL_SEARCH", "").lower() in {"1", "true", "yes"}:
+            return "lexical"
+
+        requested_mode = os.getenv("SEARCH_MODE", "auto").strip().lower()
+        if requested_mode in {"full", "text", "lexical"}:
+            return requested_mode
+        if requested_mode != "auto":
+            print(f"Unknown SEARCH_MODE='{requested_mode}', defaulting to auto.")
+
+        if os.getenv("FORCE_FULL_CLIP", "").lower() in {"1", "true", "yes"}:
+            return "full"
+
+        # Railway free tier: text-only semantic mode avoids full CLIP OOM crashes.
+        if self.on_railway:
+            return "text"
+        return "full"
 
     async def initialize(self, force_reindex: bool = False):
         """Load memes from Imgflip and local folder, then create embeddings"""
@@ -39,10 +96,16 @@ class MemeSearchEngine:
                 with open(self.cache_file, 'r') as f:
                     cache_data = json.load(f)
                     self.memes = cache_data['memes']
-                    self.embeddings = np.array(cache_data['embeddings'])
-                    self.is_ready = True
-                    print(f"✓ Loaded {len(self.memes)} memes from cache")
-                    return
+                    if self.semantic_mode and cache_data.get('embeddings') is not None:
+                        self.embeddings = np.array(cache_data['embeddings'], dtype=np.float32)
+                    else:
+                        self.embeddings = None
+                    if self.semantic_mode and self.embeddings is None:
+                        print("Cache has no embeddings for semantic mode; rebuilding index...")
+                    else:
+                        self.is_ready = True
+                        print(f"✓ Loaded {len(self.memes)} memes from cache")
+                        return
             except Exception as e:
                 print(f"Cache load failed: {e}. Re-indexing...")
 
@@ -80,10 +143,14 @@ class MemeSearchEngine:
         self.memes = deduplicated_memes
         print(f"✓ Deduplicated to {len(self.memes)} unique memes (removed {len(all_memes) - len(self.memes)} duplicates)")
 
-        # Create embeddings for all memes
-        print("Creating embeddings (this may take a minute)...")
-        self.embeddings = self._create_embeddings()
-        print(f"✓ Created embeddings for {len(self.memes)} memes")
+        if self.semantic_mode:
+            # Create embeddings for all memes
+            print("Creating embeddings (this may take a minute)...")
+            self.embeddings = self._create_embeddings()
+            print(f"✓ Created embeddings for {len(self.memes)} memes")
+        else:
+            self.embeddings = None
+            print("Lexical mode enabled; skipped CLIP embedding creation.")
 
         # Save to cache
         self._save_cache()
@@ -108,7 +175,7 @@ class MemeSearchEngine:
                         "width": meme["width"],
                         "height": meme["height"]
                     })
-                return memes
+                return memes[:self.max_remote_memes]
         except Exception as e:
             print(f"Error fetching Imgflip memes: {e}")
 
@@ -131,7 +198,7 @@ class MemeSearchEngine:
                     "keywords": template.get('keywords', [])
                 })
 
-            return memes
+            return memes[:self.max_remote_memes]
         except Exception as e:
             print(f"Error fetching Memegen templates: {e}")
             return []
@@ -235,7 +302,36 @@ class MemeSearchEngine:
         return context
 
     def _create_embeddings(self) -> np.ndarray:
-        """Create multi-modal CLIP embeddings combining visual and text context"""
+        """Create embeddings depending on active search mode."""
+        if self.search_mode == "text":
+            return self._create_text_embeddings()
+        return self._create_multimodal_embeddings()
+
+    def _create_text_embeddings(self) -> np.ndarray:
+        """Create text-only CLIP embeddings from meme context (low-memory mode)."""
+        contexts = [self._generate_meme_context(meme) for meme in self.memes]
+        batch_size = int(os.getenv("TEXT_EMBED_BATCH_SIZE", "128"))
+        all_embeddings: List[np.ndarray] = []
+
+        for start in range(0, len(contexts), batch_size):
+            batch = contexts[start:start + batch_size]
+            batch_embeddings = self._encode_text(batch)
+            if batch_embeddings is None:
+                raise RuntimeError("Text model not initialized for text embedding mode")
+            all_embeddings.append(batch_embeddings)
+            processed = min(start + batch_size, len(contexts))
+            print(f"  Processed {processed}/{len(contexts)} meme contexts...")
+
+        if not all_embeddings:
+            return np.zeros((0, 512), dtype=np.float32)
+
+        return np.vstack(all_embeddings).astype(np.float32)
+
+    def _create_multimodal_embeddings(self) -> np.ndarray:
+        """Create multi-modal CLIP embeddings combining visual and text context."""
+        if self.model is None or self.processor is None:
+            raise RuntimeError("Full CLIP model not initialized for multimodal embeddings")
+
         embeddings = []
 
         for i, meme in enumerate(self.memes):
@@ -251,7 +347,7 @@ class MemeSearchEngine:
                 img_inputs = self.processor(images=image, return_tensors="pt")
                 img_inputs = {k: v.to(self.device) for k, v in img_inputs.items()}
 
-                with torch.no_grad():
+                with torch.inference_mode():
                     # Visual features
                     vision_outputs = self.model.vision_model(**img_inputs)
                     image_features = vision_outputs.pooler_output
@@ -272,7 +368,7 @@ class MemeSearchEngine:
                     combined_features = 0.7 * image_features + 0.3 * text_features
                     combined_features = F.normalize(combined_features, p=2, dim=-1)
 
-                embeddings.append(combined_features.cpu().numpy()[0])
+                embeddings.append(combined_features.cpu().numpy()[0].astype(np.float32))
 
                 if (i + 1) % 10 == 0:
                     print(f"  Processed {i + 1}/{len(self.memes)} memes...")
@@ -280,33 +376,52 @@ class MemeSearchEngine:
             except Exception as e:
                 print(f"Error processing {meme['name']}: {e}")
                 # Add zero embedding as placeholder (512 dims for base model)
-                embeddings.append(np.zeros(512))
+                embeddings.append(np.zeros(512, dtype=np.float32))
 
         return np.array(embeddings)
 
+    def _encode_text(self, texts: List[str]) -> np.ndarray | None:
+        """Encode text into normalized CLIP embedding space."""
+        if self.search_mode == "full":
+            if self.model is None or self.processor is None:
+                return None
+            inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.inference_mode():
+                text_outputs = self.model.text_model(**inputs)
+                text_features = self.model.text_projection(text_outputs.pooler_output)
+                text_features = F.normalize(text_features, p=2, dim=-1)
+            return text_features.cpu().numpy().astype(np.float32)
+
+        if self.search_mode == "text":
+            if self.text_model is None or self.tokenizer is None:
+                return None
+            inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.inference_mode():
+                outputs = self.text_model(**inputs)
+                text_features = F.normalize(outputs.text_embeds, p=2, dim=-1)
+            return text_features.cpu().numpy().astype(np.float32)
+
+        return None
+
     async def search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search for memes using natural language query"""
+        if not self.semantic_mode or self.embeddings is None:
+            return self._search_lexically(query, limit)
 
-        # Create text embedding
-        inputs = self.processor(text=[query], return_tensors="pt", padding=True)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            # Use text model directly
-            text_outputs = self.model.text_model(**inputs)
-            text_features = text_outputs.pooler_output
-            # Project to joint embedding space
-            text_features = self.model.text_projection(text_features)
-            # Normalize
-            text_features = F.normalize(text_features, p=2, dim=-1)
-
-        text_embedding = text_features.cpu().numpy()[0]
+        query_embedding = self._encode_text([query])
+        if query_embedding is None:
+            return self._search_lexically(query, limit)
+        text_embedding = query_embedding[0]
 
         # Calculate cosine similarities
         similarities = np.dot(self.embeddings, text_embedding)
 
-        # Filter out low-confidence matches (below 0.18 similarity)
-        min_threshold = 0.18
+        # Text-only mode tends to produce slightly lower similarity values.
+        min_threshold = 0.16 if self.search_mode == "text" else 0.18
         valid_indices = np.where(similarities >= min_threshold)[0]
 
         if len(valid_indices) == 0:
@@ -326,12 +441,43 @@ class MemeSearchEngine:
 
         return results
 
+    def _tokenize(self, text: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 2}
+
+    def _search_lexically(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Fallback search when CLIP isn't available (low-memory environments)."""
+        query_tokens = self._tokenize(query)
+        query_l = query.lower()
+
+        scored: List[tuple[float, Dict[str, Any]]] = []
+        for meme in self.memes:
+            context = self._generate_meme_context(meme)
+            text = f"{meme.get('name', '')} {context}".lower()
+            text_tokens = self._tokenize(text)
+
+            overlap = len(query_tokens & text_tokens)
+            token_score = overlap / max(len(query_tokens), 1)
+            substring_boost = 0.3 if query_l and query_l in text else 0.0
+            score = min(0.99, token_score + substring_boost)
+
+            if score > 0:
+                scored.append((score, meme))
+
+        if not scored:
+            fallback = self.memes[:limit]
+            return [{**m, "score": 0.0} for m in fallback]
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [{**meme, "score": float(score)} for score, meme in scored[:limit]]
+
     def _save_cache(self):
         """Save memes and embeddings to cache file"""
         try:
             cache_data = {
                 "memes": self.memes,
-                "embeddings": self.embeddings.tolist()
+                "embeddings": self.embeddings.tolist() if self.embeddings is not None else None,
+                "search_mode": self.search_mode,
+                "model_name": self.model_name,
             }
             with open(self.cache_file, 'w') as f:
                 json.dump(cache_data, f)
