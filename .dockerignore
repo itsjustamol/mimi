@@ -1,0 +1,14 @@
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.env
+.DS_Store
+*.md
+.vscode/
+.idea/
+.cursor/
+generated_memes/

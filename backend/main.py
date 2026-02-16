@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import os
 import uuid
+import asyncio
 from io import BytesIO
 from dotenv import load_dotenv
 import anthropic
@@ -30,9 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize search engine
-print("Initializing semantic search engine...")
-search_engine = MemeSearchEngine()
+# Initialize search engine lazily (avoid blocking server start on Railway)
+search_engine = None
 
 # Directory for server-side generated meme images
 GENERATED_DIR = Path("generated_memes")
@@ -162,12 +162,27 @@ class IndexStatus(BaseModel):
     status: str
     sources: dict
 
-@app.on_event("startup")
-async def startup_event():
-    """Load and index memes on startup"""
+async def _init_search_engine():
+    """Initialize search engine in background so server can start immediately."""
+    global search_engine
+    print("Initializing semantic search engine...")
+    # Run the CPU-heavy model loading in a thread to avoid blocking the event loop
+    loop = asyncio.get_event_loop()
+    engine = await loop.run_in_executor(None, MemeSearchEngine)
+    search_engine = engine
     print("Loading memes and creating embeddings...")
     await search_engine.initialize()
     print(f"✓ Indexed {len(search_engine.memes)} memes")
+
+@app.on_event("startup")
+async def startup_event():
+    """Start model loading in background – server is responsive immediately."""
+    asyncio.create_task(_init_search_engine())
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Railway"""
+    return {"status": "ok"}
 
 @app.get("/")
 async def root():
@@ -195,6 +210,8 @@ async def serve_generated_meme(filename: str):
 @app.get("/api/status")
 async def get_status():
     """Get indexing status"""
+    if search_engine is None:
+        return {"total_memes": 0, "status": "loading", "sources": {}}
     return {
         "total_memes": len(search_engine.memes),
         "status": "ready" if search_engine.is_ready else "indexing",
@@ -208,8 +225,8 @@ async def get_status():
 @app.post("/api/search")
 async def search_memes(query: SearchQuery):
     """Search for memes using natural language"""
-    if not search_engine.is_ready:
-        raise HTTPException(status_code=503, message="Search engine is still indexing")
+    if search_engine is None or not search_engine.is_ready:
+        raise HTTPException(status_code=503, detail="Search engine is still loading. Please wait a moment and try again.")
 
     results = await search_engine.search(query.query, limit=query.limit)
 
@@ -322,6 +339,8 @@ Example output format: "Line one text / Line two text" """
 @app.post("/api/reindex")
 async def reindex():
     """Force re-indexing of all memes"""
+    if search_engine is None:
+        raise HTTPException(status_code=503, detail="Search engine is still loading.")
     await search_engine.initialize(force_reindex=True)
     return {"status": "success", "total_memes": len(search_engine.memes)}
 

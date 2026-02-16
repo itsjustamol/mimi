@@ -1,10 +1,11 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple/
 fastapi>=0.115.0
 uvicorn>=0.32.0
 python-multipart>=0.0.12
 pillow>=11.0.0
 torch>=2.5.0
 transformers>=4.46.0
-sentence-transformers>=3.3.0
 requests>=2.32.0
 numpy>=2.0.0
 aiofiles>=24.1.0
