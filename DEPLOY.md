@@ -72,6 +72,10 @@ Your meme search app is now live! 🎉
 - This is normal and depends on `MAX_REMOTE_MEMES`
 - Subsequent restarts are faster (cache is reused)
 
+### Railway Free Tier Recommendation
+- Keep `SEARCH_MODE=auto` (this uses lexical mode on Railway for stability)
+- Use `SEARCH_MODE=text` or `SEARCH_MODE=full` only if you move to a higher-memory plan
+
 ### Free Tier Limits
 Railway free tier includes:
 - $5/month credit

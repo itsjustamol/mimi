@@ -4,10 +4,7 @@ import requests
 from pathlib import Path
 from typing import List, Dict, Any
 import re
-import torch
-import torch.nn.functional as F
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, CLIPTextModelWithProjection
 import numpy as np
 from io import BytesIO
 
@@ -16,7 +13,7 @@ class MemeSearchEngine:
         self.memes: List[Dict[str, Any]] = []
         self.embeddings: np.ndarray = None
         self.is_ready = False
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"
         self.on_railway = bool(
             os.getenv("RAILWAY_PROJECT_ID")
             or os.getenv("RAILWAY_ENVIRONMENT_ID")
@@ -29,6 +26,12 @@ class MemeSearchEngine:
         self.processor = None
         self.text_model = None
         self.tokenizer = None
+        self.torch = None
+        self.F = None
+        self.CLIPProcessor = None
+        self.CLIPModel = None
+        self.CLIPTokenizer = None
+        self.CLIPTextModelWithProjection = None
 
         # Keep defaults safe for constrained environments (Railway free tier).
         default_remote_memes = "160" if self.on_railway else "250"
@@ -37,15 +40,17 @@ class MemeSearchEngine:
         print(f"Search mode: {self.search_mode}")
         try:
             if self.search_mode == "full":
+                self._load_ml_runtime()
                 print(f"Loading CLIP full model ({self.model_name})...")
-                self.model = CLIPModel.from_pretrained(self.model_name, low_cpu_mem_usage=True)
-                self.processor = CLIPProcessor.from_pretrained(self.model_name)
+                self.model = self.CLIPModel.from_pretrained(self.model_name, low_cpu_mem_usage=True)
+                self.processor = self.CLIPProcessor.from_pretrained(self.model_name)
                 self.model.to(self.device)
                 print(f"✓ CLIP full model loaded on {self.device}")
             elif self.search_mode == "text":
+                self._load_ml_runtime()
                 print(f"Loading CLIP text model ({self.model_name})...")
-                self.tokenizer = CLIPTokenizer.from_pretrained(self.model_name)
-                self.text_model = CLIPTextModelWithProjection.from_pretrained(
+                self.tokenizer = self.CLIPTokenizer.from_pretrained(self.model_name)
+                self.text_model = self.CLIPTextModelWithProjection.from_pretrained(
                     self.model_name, low_cpu_mem_usage=True
                 )
                 self.text_model.to(self.device)
@@ -62,9 +67,10 @@ class MemeSearchEngine:
             self.tokenizer = None
             print(f"Model load failed; falling back to lexical search mode: {e}")
 
-        # Paths
-        self.cache_file = Path("embeddings_cache.json")
-        self.local_memes_dir = Path("../memes")
+        # Paths (resolve from this file so runtime cwd does not matter)
+        self.base_dir = Path(__file__).resolve().parent
+        self.cache_file = self.base_dir / "embeddings_cache.json"
+        self.local_memes_dir = (self.base_dir / "../memes").resolve()
         self.local_memes_dir.mkdir(exist_ok=True)
 
     def _resolve_search_mode(self) -> str:
@@ -81,10 +87,28 @@ class MemeSearchEngine:
         if os.getenv("FORCE_FULL_CLIP", "").lower() in {"1", "true", "yes"}:
             return "full"
 
-        # Railway free tier: text-only semantic mode avoids full CLIP OOM crashes.
+        # Railway free tier: lexical mode avoids PyTorch/transformer memory spikes.
+        # Users can still explicitly set SEARCH_MODE=text or full on larger plans.
         if self.on_railway:
-            return "text"
+            return "lexical"
         return "full"
+
+    def _load_ml_runtime(self):
+        """Import ML dependencies lazily so lexical mode has minimal memory footprint."""
+        if self.torch is not None:
+            return
+
+        import torch
+        import torch.nn.functional as F
+        from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, CLIPTextModelWithProjection
+
+        self.torch = torch
+        self.F = F
+        self.CLIPProcessor = CLIPProcessor
+        self.CLIPModel = CLIPModel
+        self.CLIPTokenizer = CLIPTokenizer
+        self.CLIPTextModelWithProjection = CLIPTextModelWithProjection
+        self.device = "cuda" if self.torch.cuda.is_available() else "cpu"
 
     async def initialize(self, force_reindex: bool = False):
         """Load memes from Imgflip and local folder, then create embeddings"""
@@ -347,12 +371,12 @@ class MemeSearchEngine:
                 img_inputs = self.processor(images=image, return_tensors="pt")
                 img_inputs = {k: v.to(self.device) for k, v in img_inputs.items()}
 
-                with torch.inference_mode():
+                with self.torch.inference_mode():
                     # Visual features
                     vision_outputs = self.model.vision_model(**img_inputs)
                     image_features = vision_outputs.pooler_output
                     image_features = self.model.visual_projection(image_features)
-                    image_features = F.normalize(image_features, p=2, dim=-1)
+                    image_features = self.F.normalize(image_features, p=2, dim=-1)
 
                     # Text context features to enhance understanding
                     context_text = self._generate_meme_context(meme)
@@ -362,11 +386,11 @@ class MemeSearchEngine:
                     text_outputs = self.model.text_model(**text_inputs)
                     text_features = text_outputs.pooler_output
                     text_features = self.model.text_projection(text_features)
-                    text_features = F.normalize(text_features, p=2, dim=-1)
+                    text_features = self.F.normalize(text_features, p=2, dim=-1)
 
                     # Combine visual (70%) + text context (30%) for better semantic understanding
                     combined_features = 0.7 * image_features + 0.3 * text_features
-                    combined_features = F.normalize(combined_features, p=2, dim=-1)
+                    combined_features = self.F.normalize(combined_features, p=2, dim=-1)
 
                 embeddings.append(combined_features.cpu().numpy()[0].astype(np.float32))
 
@@ -388,10 +412,10 @@ class MemeSearchEngine:
             inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            with torch.inference_mode():
+            with self.torch.inference_mode():
                 text_outputs = self.model.text_model(**inputs)
                 text_features = self.model.text_projection(text_outputs.pooler_output)
-                text_features = F.normalize(text_features, p=2, dim=-1)
+                text_features = self.F.normalize(text_features, p=2, dim=-1)
             return text_features.cpu().numpy().astype(np.float32)
 
         if self.search_mode == "text":
@@ -400,9 +424,9 @@ class MemeSearchEngine:
             inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            with torch.inference_mode():
+            with self.torch.inference_mode():
                 outputs = self.text_model(**inputs)
-                text_features = F.normalize(outputs.text_embeds, p=2, dim=-1)
+                text_features = self.F.normalize(outputs.text_embeds, p=2, dim=-1)
             return text_features.cpu().numpy().astype(np.float32)
 
         return None
